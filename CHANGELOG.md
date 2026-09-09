@@ -7,4 +7,8 @@ use semantic versioning where practical.
 
 ## [Unreleased]
 
-- Prepare the first public release.
+## [0.1.1] - 2026-09-09
+
+- Publish the first cross-platform release with recursive `On disk` sizing.
+- Add GitHub Release packaging, checksums, and contributor templates.
+- Fix Windows volume handling in scanner fixtures and CI.
