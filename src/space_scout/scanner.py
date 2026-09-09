@@ -12,10 +12,18 @@ from .policy import Policy, safe_decide
 
 
 class _Scanner:
-    def __init__(self, options: ScanOptions, root_device: int, root_identity: tuple[int, int], policy: Policy | None = None):
+    def __init__(
+        self,
+        options: ScanOptions,
+        root_device: int,
+        root_identity: tuple[int, int],
+        root_path: Path,
+        policy: Policy | None = None,
+    ):
         self.options = options
         self.policy = policy
         self.root_device = root_device
+        self.root_path = root_path
         self.warnings: list[ScanWarning] = []
         # Keep identities of directories on the current recursion path.  This
         # catches symlinks back to an ancestor without relying on recursion
@@ -33,6 +41,18 @@ class _Scanner:
     def skipped(self, path: Path, name: str, code: str, message: str) -> Entry:
         self.warn(path, code, message)
         return Entry(path, name, "skipped", 0, None, warning=message)
+
+    def different_filesystem(self, path: Path, metadata: os.stat_result) -> bool:
+        if not self.options.stay_on_filesystem:
+            return False
+        if os.name == "nt":
+            # Windows st_dev values are not stable for temporary junctions and
+            # mount points. Drive comparison is the portable volume boundary.
+            try:
+                return path.resolve(strict=False).drive.lower() != self.root_path.drive.lower()
+            except (OSError, RuntimeError, ValueError):
+                return False
+        return metadata.st_dev != self.root_device
 
     def scan_entry(self, entry: os.DirEntry[str], depth: int) -> Entry:
         path = Path(entry.path)
@@ -69,7 +89,7 @@ class _Scanner:
                 target = entry.stat(follow_symlinks=True)
             except (PermissionError, FileNotFoundError, OSError, RecursionError) as exc:
                 return self.skipped(path, entry.name, "stat_error", str(exc))
-            if self.options.stay_on_filesystem and target.st_dev != self.root_device:
+            if self.different_filesystem(path, target):
                 return self.skipped(path, entry.name, "different_filesystem", "mount point skipped")
             if stat.S_ISDIR(target.st_mode):
                 return self.scan_directory(
@@ -80,7 +100,7 @@ class _Scanner:
                          modified_min_ns=modified, modified_max_ns=modified)
 
         if stat.S_ISDIR(mode):
-            if self.options.stay_on_filesystem and metadata.st_dev != self.root_device:
+            if self.different_filesystem(path, metadata):
                 return self.skipped(path, entry.name, "different_filesystem", "mount point skipped")
             return self.scan_directory(
                 path, entry.name, depth, allocated,
@@ -177,7 +197,13 @@ def scan(options: ScanOptions, policy: Policy | None = None) -> ScanSnapshot:
         return ScanSnapshot(root, (), (warning,))
     if not stat.S_ISDIR(root_metadata.st_mode):
         return ScanSnapshot(root, (), (ScanWarning(root, "root_not_directory", "scan root must be a directory"),))
-    scanner = _Scanner(options, root_metadata.st_dev, (root_metadata.st_dev, root_metadata.st_ino), policy)
+    scanner = _Scanner(
+        options,
+        root_metadata.st_dev,
+        (root_metadata.st_dev, root_metadata.st_ino),
+        root,
+        policy,
+    )
     entries: list[Entry] = []
     try:
         with os.scandir(root) as directory:
