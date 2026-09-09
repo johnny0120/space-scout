@@ -29,7 +29,7 @@ def test_check_script_keeps_running_after_a_failed_check(tmp_path: Path) -> None
     fake_uv = fake_bin / "uv"
     fake_uv.write_text(
         "#!/bin/sh\n"
-        f'printf "%s\\n" "$*" >> "{uv_log}"\n'
+        f'printf "%s\\n" "$*" >> "{uv_log.as_posix()}"\n'
         'case "$2" in\n'
         '  mypy) exit 2 ;;\n'
         'esac\n'

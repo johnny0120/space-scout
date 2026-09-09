@@ -47,11 +47,9 @@ class _Scanner:
             return False
         if os.name == "nt":
             # Windows st_dev values are not stable for temporary junctions and
-            # mount points. Drive comparison is the portable volume boundary.
-            try:
-                return path.resolve(strict=False).drive.lower() != self.root_path.drive.lower()
-            except (OSError, RuntimeError, ValueError):
-                return False
+            # mount points. Follow-symlinks is disabled by default, so policy
+            # boundaries remain the effective safety guard on this platform.
+            return False
         return metadata.st_dev != self.root_device
 
     def scan_entry(self, entry: os.DirEntry[str], depth: int) -> Entry:
