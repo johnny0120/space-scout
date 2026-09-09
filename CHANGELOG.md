@@ -7,6 +7,10 @@ use semantic versioning where practical.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-09-09
+
+- Fix the GitHub Release publish job so it can resolve the tag before uploading artifacts.
+
 ## [0.1.2] - 2026-09-09
 
 - Improve Windows volume and directory-cycle handling in cross-platform scans.
