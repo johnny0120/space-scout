@@ -58,11 +58,11 @@ def flatten(snapshot: ScanSnapshot, policy: Policy, overrides: dict[str, str] | 
     )))
 
 
-def _escape(value: str) -> str:
+def _escape(value: str, *, escape_backslash: bool = True) -> str:
     # Escape terminal controls (including Unicode format controls), retaining
     # printable non-ASCII names. Literal backslashes remain distinguishable.
     return "".join(
-        "\\\\" if char == "\\" else char if char.isprintable()
+        "\\\\" if char == "\\" and escape_backslash else char if char.isprintable()
         else char.encode("unicode_escape").decode("ascii")
         for char in value
     )

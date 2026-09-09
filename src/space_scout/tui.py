@@ -142,7 +142,7 @@ class BrowseApp(App[int]):
         self._render_entries()
         self.query_one("#entries", DataTable).focus()
         state = "WARNING" if self.snapshot.warnings else "READY"
-        self._status(f"{state} · {_escape(str(self.snapshot.root))} · {len(self.snapshot.warnings)} scan warnings")
+        self._status(f"{state} · {_escape(str(self.snapshot.root), escape_backslash=False)} · {len(self.snapshot.warnings)} scan warnings")
 
     def on_resize(self, event: events.Resize) -> None:
         if self.query("#entries"):
@@ -298,7 +298,7 @@ class BrowseApp(App[int]):
         else:
             decision, _ = _browse_decision(entry.path, self.policy, self.unlocked_paths)
             cleanup = cleanup_rejection(entry.path, self.policy)
-            text = (f"Path: {_escape(str(entry.path))}\n\n"
+            text = (f"Path: {_escape(str(entry.path), escape_backslash=False)}\n\n"
                     f"Status: {self._entry_status(entry)}\n"
                     f"Class: {_escape(self._classification(entry))}\nChildren: {len(entry.children)}\n"
                     f"On disk: {_detail_on_disk(entry)}\n"
@@ -425,7 +425,7 @@ class BrowseApp(App[int]):
                 self.action_rescan()
             else:
                 self._status("Unlock cancelled.")
-        self.push_screen(_Prompt(f"Unlock scan for exact path:\n{_escape(str(entry.path))}\n\n"
+        self.push_screen(_Prompt(f"Unlock scan for exact path:\n{_escape(str(entry.path), escape_backslash=False)}\n\n"
                                  "This allows reading protected contents for this session. "
                                  "Cleanup remains blocked. Type unlock to confirm:"), confirm)
 
@@ -444,7 +444,7 @@ class BrowseApp(App[int]):
                 self._trash(entry)
             else:
                 self._status("Trash cancelled.")
-        self.push_screen(_Prompt(f"Move exact path to system trash:\n{_escape(str(entry.path))}\n\n"
+        self.push_screen(_Prompt(f"Move exact path to system trash:\n{_escape(str(entry.path), escape_backslash=False)}\n\n"
                                  f"Class: {_escape(self._classification(entry))}\n"
                                  f"On disk: {_detail_on_disk(entry)}\n"
                                  f"Estimated size: {entry.logical_bytes} logical bytes; "
@@ -481,7 +481,7 @@ class BrowseApp(App[int]):
             self._render_entries()
             state = "TRASHED" if all(result.success for result in results) else "WARNING"
             self._status(state + " · " + "; ".join(
-                f"{_escape(str(result.path))}: {_escape(result.message)}" for result in results
+                f"{_escape(str(result.path), escape_backslash=False)}: {_escape(result.message)}" for result in results
             ) + " · r to rescan")
         finally:
             self._busy = False

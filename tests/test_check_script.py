@@ -4,7 +4,10 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 
 def test_check_script_exists_and_uses_uv_run() -> None:
@@ -40,6 +43,9 @@ def test_check_script_keeps_running_after_a_failed_check(tmp_path: Path) -> None
 
     env = os.environ.copy()
     env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+
+    if sys.platform.startswith("win"):
+        pytest.skip("bash fixture shim is unavailable on Windows runners")
 
     result = subprocess.run(
         ["bash", str(script)],

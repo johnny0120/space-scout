@@ -16,7 +16,7 @@ class _Scanner:
         self,
         options: ScanOptions,
         root_device: int,
-        root_identity: tuple[int, int],
+        root_identity: object,
         root_path: Path,
         policy: Policy | None = None,
     ):
@@ -28,7 +28,15 @@ class _Scanner:
         # Keep identities of directories on the current recursion path.  This
         # catches symlinks back to an ancestor without relying on recursion
         # limits (and still permits the same directory in separate branches).
-        self.active_directories: set[tuple[int, int]] = {root_identity}
+        self.active_directories: set[object] = {root_identity}
+
+    @staticmethod
+    def directory_identity(path: Path, metadata: os.stat_result) -> object:
+        if os.name == "nt":
+            # Windows inode values are frequently zero or reused. A resolved
+            # path gives stable cycle detection for junctions and symlinks.
+            return str(path.resolve(strict=False)).casefold()
+        return (metadata.st_dev, metadata.st_ino)
 
     def warn(self, path: Path, code: str, message: str) -> None:
         self.warnings.append(ScanWarning(path, code, message))
@@ -92,7 +100,7 @@ class _Scanner:
             if stat.S_ISDIR(target.st_mode):
                 return self.scan_directory(
                     path, entry.name, depth, allocated,
-                    identity=(target.st_dev, target.st_ino), modified_ns=modified, symlink=True,
+                    identity=self.directory_identity(path, target), modified_ns=modified, symlink=True,
                 )
             return Entry(path, entry.name, "symlink", target.st_size, allocated,
                          modified_min_ns=modified, modified_max_ns=modified)
@@ -102,7 +110,7 @@ class _Scanner:
                 return self.skipped(path, entry.name, "different_filesystem", "mount point skipped")
             return self.scan_directory(
                 path, entry.name, depth, allocated,
-                identity=(metadata.st_dev, metadata.st_ino), modified_ns=modified,
+                identity=self.directory_identity(path, metadata), modified_ns=modified,
             )
         if stat.S_ISREG(mode):
             return Entry(path, entry.name, "file", metadata.st_size, allocated,
@@ -119,7 +127,7 @@ class _Scanner:
         depth: int,
         allocated: int | None,
         *,
-        identity: tuple[int, int],
+        identity: object,
         modified_ns: int,
         symlink: bool = False,
     ) -> Entry:
@@ -198,7 +206,7 @@ def scan(options: ScanOptions, policy: Policy | None = None) -> ScanSnapshot:
     scanner = _Scanner(
         options,
         root_metadata.st_dev,
-        (root_metadata.st_dev, root_metadata.st_ino),
+        _Scanner.directory_identity(root, root_metadata),
         root,
         policy,
     )
