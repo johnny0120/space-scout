@@ -65,6 +65,30 @@ def test_browse_wires_snapshot_policy_config_and_exit_code(tmp_path, monkeypatch
     assert main(["browse", str(tmp_path)]) == 3
 
 
+def test_browse_select_passes_patterns_to_scanner_and_tui(tmp_path, monkeypatch):
+    from space_scout.models import ScanSnapshot
+
+    config = Config({}, (), {})
+    snapshot = ScanSnapshot(tmp_path, ())
+    monkeypatch.setattr("space_scout.cli.load_config", lambda: config)
+    observed: dict[str, object] = {}
+
+    def scan(root, policy, *, select_patterns):
+        observed["scan"] = (root, select_patterns)
+        return snapshot
+
+    def browse(actual_snapshot, policy, actual_config, *, select_patterns):
+        observed["browse"] = (actual_snapshot, select_patterns)
+        return 0
+
+    monkeypatch.setattr("space_scout.tui.scan_for_browse", scan)
+    monkeypatch.setattr("space_scout.tui.run_browse", browse)
+
+    assert main(["browse", str(tmp_path), "--select", ".*", "--select", "Developer"]) == 0
+    assert observed["scan"] == (tmp_path, (".*", "Developer"))
+    assert observed["browse"] == (snapshot, (".*", "Developer"))
+
+
 def test_browse_initial_scan_handles_symlink_loop(tmp_path, monkeypatch, symlink_supported):
     loop = tmp_path / "loop"
     loop.symlink_to("loop")
@@ -81,4 +105,3 @@ def test_browse_initial_scan_handles_symlink_loop(tmp_path, monkeypatch, symlink
 
     monkeypatch.setattr("space_scout.tui.run_browse", browse)
     assert main(["browse", str(tmp_path)]) == 2
-

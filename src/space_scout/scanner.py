@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Literal
 
@@ -214,6 +215,10 @@ def scan(options: ScanOptions, policy: Policy | None = None) -> ScanSnapshot:
     try:
         with os.scandir(root) as directory:
             for child in directory:
+                if options.select_patterns and not any(
+                    fnmatchcase(child.name, pattern) for pattern in options.select_patterns
+                ):
+                    continue
                 entries.append(scanner.scan_entry(child, 1))
     except (PermissionError, FileNotFoundError, OSError, RecursionError) as exc:
         scanner.warn(root, "scan_error", str(exc))

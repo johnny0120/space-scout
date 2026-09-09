@@ -17,6 +17,24 @@ def test_directory_size_is_recursive(tmp_path: Path):
     assert sum(entry.logical_bytes for entry in snapshot.entries) == 18
 
 
+def test_select_patterns_match_direct_children_and_scan_selected_directories_fully(tmp_path: Path):
+    hidden = tmp_path / ".cache"
+    hidden.mkdir()
+    (hidden / "pip").mkdir()
+    (hidden / "pip" / "package.whl").write_bytes(b"x" * 11)
+    (tmp_path / "Documents").mkdir()
+    (tmp_path / "Documents" / "notes.txt").write_bytes(b"d" * 19)
+    (tmp_path / ".env").write_bytes(b"e" * 3)
+
+    snapshot = scan(ScanOptions(tmp_path, select_patterns=(".*",)))
+
+    assert [entry.name for entry in snapshot.entries] == [".cache", ".env"]
+    cache = snapshot.entries[0]
+    assert cache.logical_bytes == 11
+    assert cache.children[0].name == "pip"
+    assert cache.children[0].children[0].name == "package.whl"
+
+
 def test_directory_allocated_bytes_include_descendants_recursively(tmp_path: Path, monkeypatch):
     parent = tmp_path / "parent"
     nested = parent / "nested"

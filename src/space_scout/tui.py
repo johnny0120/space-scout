@@ -26,10 +26,11 @@ from .trash import trash_many
 
 def scan_for_browse(
     root: Path, policy: Policy, unlocked: frozenset[Path] = frozenset(),
+    *, select_patterns: tuple[str, ...] = (),
 ) -> ScanSnapshot:
     """Use the same policy-aware traversal as the public scan command."""
     return scan(ScanOptions(root, stay_on_filesystem=policy.stay_on_filesystem,
-                            unlocked_paths=unlocked), policy)
+                            unlocked_paths=unlocked, select_patterns=select_patterns), policy)
 
 
 def _format_utc_ns(value: int) -> str:
@@ -108,11 +109,18 @@ class BrowseApp(App[int]):
     #status { height: auto; max-height: 4; padding: 0 1; }
     """
 
-    def __init__(self, snapshot: ScanSnapshot, policy: Policy, config: Config):
+    def __init__(
+        self,
+        snapshot: ScanSnapshot,
+        policy: Policy,
+        config: Config,
+        select_patterns: tuple[str, ...] = (),
+    ):
         super().__init__()
         self.snapshot = snapshot
         self.policy = policy or default_policy(snapshot.root)
         self.config = config or Config({}, (), {})
+        self.select_patterns = select_patterns
         configured_sort = "on_disk" if self.config.sort_key == "size" else self.config.sort_key
         self._sort_column = configured_sort if configured_sort in {"on_disk", "name", "class", "status"} else "on_disk"
         self._sort_reverse = self._sort_column == "on_disk"
@@ -392,7 +400,18 @@ class BrowseApp(App[int]):
         self._busy = True
         self._status("SCANNING · Scanning…")
         try:
-            snapshot = await asyncio.to_thread(scan_for_browse, self.snapshot.root, self.policy, self.unlocked_paths)
+            if self.select_patterns:
+                snapshot = await asyncio.to_thread(
+                    scan_for_browse,
+                    self.snapshot.root,
+                    self.policy,
+                    self.unlocked_paths,
+                    select_patterns=self.select_patterns,
+                )
+            else:
+                snapshot = await asyncio.to_thread(
+                    scan_for_browse, self.snapshot.root, self.policy, self.unlocked_paths
+                )
             self.snapshot = snapshot
             self._trashed.clear()
             self._render_entries()
@@ -490,5 +509,10 @@ class BrowseApp(App[int]):
         self.exit(self._exit_code or (2 if self.snapshot.warnings else 0))
 
 
-def run_browse(snapshot: ScanSnapshot, policy: Policy, config: Config) -> int:
-    return BrowseApp(snapshot, policy, config).run() or 0
+def run_browse(
+    snapshot: ScanSnapshot,
+    policy: Policy,
+    config: Config,
+    select_patterns: tuple[str, ...] = (),
+) -> int:
+    return BrowseApp(snapshot, policy, config, select_patterns=select_patterns).run() or 0

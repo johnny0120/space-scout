@@ -33,6 +33,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
     browse_parser = subparsers.add_parser("browse")
     browse_parser.add_argument("path", metavar="PATH", type=Path)
+    browse_parser.add_argument(
+        "--select",
+        dest="select_patterns",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="select matching direct children as scan roots (repeatable; selected directories are scanned fully)",
+    )
     browse_parser.set_defaults(handler=_browse_command)
 
     trash_parser = subparsers.add_parser("trash")
@@ -83,7 +91,13 @@ def _browse_command(args: argparse.Namespace) -> int:
     config = load_config()
     root = args.path.expanduser().absolute()
     policy = _configured_policy(root, config)
-    return run_browse(scan_for_browse(root, policy), policy, config)
+    select_patterns = tuple(args.select_patterns)
+    if select_patterns:
+        snapshot = scan_for_browse(root, policy, select_patterns=select_patterns)
+        return run_browse(snapshot, policy, config, select_patterns=select_patterns)
+    else:
+        snapshot = scan_for_browse(root, policy)
+        return run_browse(snapshot, policy, config)
 
 
 def _estimated_size(path: Path, policy: Policy) -> int:

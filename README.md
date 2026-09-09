@@ -32,6 +32,24 @@ Use `browse` when you want an interactive Explorer + Inspector view:
 uv run space-scout browse /path/to/project
 ```
 
+`browse PATH` scans every direct child of the explicit `PATH` and recursively totals
+each selected directory. To limit the scan to matching direct children, repeat
+`--select GLOB`:
+
+```bash
+uv run space-scout browse "$HOME" --select '.*'
+
+uv run space-scout browse "$HOME" --select '.*' --select 'Developer'
+
+uv run space-scout browse "$HOME/Downloads" --select '*.zip' --select '*.dmg'
+```
+
+The glob is matched against the names immediately below `PATH`; it is not a
+recursive content filter. Once a directory matches, all files below it are
+scanned, including non-hidden files. Without `--select`, no visible or hidden
+child is omitted (subject to the normal safety policy). The TUI `/` filter only
+changes which already-scanned rows are displayed and does not reduce scan time.
+
 For stable output that a script can consume:
 
 ```bash

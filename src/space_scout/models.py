@@ -14,6 +14,9 @@ class ScanOptions:
     stay_on_filesystem: bool = True
     unlocked_paths: frozenset[Path] = frozenset()
     max_depth: int | None = None
+    # Optional fnmatch patterns applied only to direct children of ``root``.
+    # Matching directories are still scanned recursively in full.
+    select_patterns: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
