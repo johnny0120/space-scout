@@ -7,6 +7,12 @@ use semantic versioning where practical.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-09
+
+- Improve Windows volume and directory-cycle handling in cross-platform scans.
+- Preserve native Windows path separators in TUI details and confirmation prompts.
+- Keep platform-specific quality checks portable across CI runners.
+
 ## [0.1.1] - 2026-09-09
 
 - Publish the first cross-platform release with recursive `On disk` sizing.
