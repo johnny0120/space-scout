@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "space-scout"
+version = "0.1.0"
+description = "Cross-platform disk-usage explorer"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Space Scout contributors" }]
+maintainers = [{ name = "johnny0120" }]
+requires-python = ">=3.11"
+keywords = ["disk-usage", "storage", "cleanup", "developer-tools"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+  "textual",
+  "send2trash",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "pytest-asyncio",
+  "pyinstaller",
+  "ruff",
+  "mypy",
+]
+
+[project.scripts]
+space-scout = "space_scout.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/johnny0120/space-scout"
+Repository = "https://github.com/johnny0120/space-scout"
+Issues = "https://github.com/johnny0120/space-scout/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+ignore = ["TRY004", "RUF012"]
+
+[tool.mypy]
+files = ["src", "scripts"]
+ignore_missing_imports = false
+
+[[tool.mypy.overrides]]
+module = ["send2trash"]
+ignore_missing_imports = true

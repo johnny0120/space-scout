@@ -1,0 +1,78 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Test ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Sync environment
+        run: uv sync --locked --extra dev
+
+      - name: Quality gate
+        if: runner.os != 'Windows'
+        run: ./scripts/check.sh
+
+      - name: Quality gate (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          uv run ruff check .
+          uv run mypy src tests scripts
+          uv run python scripts/check_public_repo.py .
+          uv run pytest -q
+
+  native:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Sync environment
+        run: uv sync --locked --extra dev
+
+      - name: Build native executable
+        run: uv run python scripts/build.py --dist-dir dist
+
+      - name: Smoke test native executable
+        run: uv run python scripts/smoke_test.py dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: space-scout-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            dist/space-scout
+            dist/space-scout.exe
+          if-no-files-found: error
