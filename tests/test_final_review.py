@@ -29,7 +29,7 @@ async def test_tui_reloads_persisted_exclusions_after_confirmation(tmp_path, mon
     policy = Policy(root, (), (root / "protected",))
     snapshot = scan(ScanOptions(root), policy)
     calls = []
-    monkeypatch.setattr("space_scout.tui.trash_many", lambda paths: calls.extend(paths) or ())
+    monkeypatch.setattr("space_scout.tui.trash_many", lambda paths, **kwargs: calls.extend(paths) or ())
     app = BrowseApp(snapshot, policy, load_config())
     async with app.run_test() as pilot:
         await pilot.press("t")
@@ -52,7 +52,7 @@ async def test_tui_fails_closed_when_final_config_reload_fails(tmp_path, monkeyp
     item.write_text("keep")
     policy = Policy(tmp_path, (), ())
     app = BrowseApp(scan(ScanOptions(tmp_path), policy), policy, Config({}, (), {}))
-    monkeypatch.setattr("space_scout.tui.trash_many", lambda paths: pytest.fail("trashed with unreadable config"))
+    monkeypatch.setattr("space_scout.tui.trash_many", lambda paths, **kwargs: pytest.fail("trashed with unreadable config"))
     # Patch the loader's I/O boundary so this also fails before tui imports it.
     monkeypatch.setattr("space_scout.config.config_path", lambda: tmp_path / "bad.toml")
     async with app.run_test() as pilot:
@@ -105,7 +105,7 @@ def test_cli_trash_preview_includes_shared_classification(tmp_path, monkeypatch,
     save_config(Config({}, (), {str(target): override} if override else {}))
     calls = []
 
-    def trash(paths):
+    def trash(paths, *, sizes=None):
         assert f"Class: {expected}" in capsys.readouterr().out
         calls.extend(paths)
         return (TrashResult(target, True, "moved"),)

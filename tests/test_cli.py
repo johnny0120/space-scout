@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -5,6 +6,7 @@ import pytest
 from space_scout.cli import main
 from space_scout.config import Config
 from space_scout.policy import Policy
+from space_scout.trash import TrashResult
 
 
 def test_trash_preview_reports_unestimated_size_before_rejection(monkeypatch, capsys, tmp_path: Path):
@@ -13,11 +15,11 @@ def test_trash_preview_reports_unestimated_size_before_rejection(monkeypatch, ca
 
     monkeypatch.setattr("space_scout.cli.load_config", lambda: Config({}, (), {}))
     monkeypatch.setattr("space_scout.cli.default_policy", lambda root: Policy(root, (), (path,)))
-    monkeypatch.setattr("space_scout.cli._estimated_size", lambda *args: pytest.fail("sized protected path"))
+    monkeypatch.setattr("space_scout.cli._preview", lambda *args: pytest.fail("sized protected path"))
 
     called = []
 
-    def fake_trash_many(paths):
+    def fake_trash_many(paths, *, sizes=None):
         called.append(tuple(paths))
         return ()
 
@@ -105,3 +107,60 @@ def test_browse_initial_scan_handles_symlink_loop(tmp_path, monkeypatch, symlink
 
     monkeypatch.setattr("space_scout.tui.run_browse", browse)
     assert main(["browse", str(tmp_path)]) == 2
+
+
+def test_trash_rejects_knowledge_protected_path(tmp_path, monkeypatch, capsys, isolated_cli):
+    npmrc = tmp_path / ".npmrc"
+    npmrc.write_text("registry=https://example.com")
+    called = []
+
+    def fake_trash_many(paths, *, sizes=None):
+        called.append(tuple(paths))
+        return ()
+
+    monkeypatch.setattr("space_scout.cli.trash_many", fake_trash_many)
+    assert main(["trash", str(npmrc), "--yes"]) == 3
+    assert called == []
+    output = capsys.readouterr().out
+    assert "rejected:" in output
+    assert "protected" in output
+
+
+def test_trash_rejects_directory_containing_credentials(tmp_path, monkeypatch, capsys, isolated_cli):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".npmrc").write_text("registry=https://example.com")
+    called = []
+
+    def fake_trash_many(paths, *, sizes=None):
+        called.append(tuple(paths))
+        return ()
+
+    monkeypatch.setattr("space_scout.cli.trash_many", fake_trash_many)
+    assert main(["trash", str(project), "--yes"]) == 3
+    assert called == []
+    output = capsys.readouterr().out
+    assert "rejected:" in output
+    assert ".npmrc" in output
+
+
+def test_trash_prints_session_summary(tmp_path, monkeypatch, capsys, isolated_cli):
+    target = tmp_path / "cache"
+    target.write_bytes(b"12345")
+
+    def fake_trash_many(paths, *, sizes=None):
+        return (TrashResult(paths[0], True, "moved to trash", (sizes or {}).get(paths[0]), 4096),)
+
+    monkeypatch.setattr("space_scout.cli.trash_many", fake_trash_many)
+    assert main(["trash", str(target), "--yes"]) == 0
+    output = capsys.readouterr().out
+    assert "moved 5" in output
+    assert "freed 4096" in output
+
+
+def test_scan_json_includes_advice(tmp_path, capsys, isolated_cli):
+    (tmp_path / "file.txt").write_text("data")
+    assert main(["scan", str(tmp_path), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["entries"]
+    assert all("advice" in entry for entry in payload["entries"])

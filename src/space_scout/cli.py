@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 from .config import Config, common_shortcuts, config_path, load_config, save_config
+from .knowledge import subtree_conflicts
 from .models import Entry, ScanOptions
 from .output import (
     _escape,
@@ -18,7 +19,7 @@ from .output import (
 )
 from .policy import Policy, cleanup_rejection, default_policy
 from .scanner import scan
-from .trash import TrashResult, trash_many
+from .trash import TrashResult, summarize, trash_many
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -100,19 +101,21 @@ def _browse_command(args: argparse.Namespace) -> int:
         return run_browse(snapshot, policy, config)
 
 
-def _estimated_size(path: Path, policy: Policy) -> int:
-    """Estimate bytes selected by a path without following symlinked trees."""
+def _preview(path: Path, policy: Policy) -> tuple[int, tuple[str, ...]]:
+    """Estimate bytes and collect protected subtree conflicts without following symlinked trees."""
     try:
         if path.is_symlink():
-            return 0
+            return 0, ()
         if path.is_file():
-            return path.stat().st_size
+            return path.stat().st_size, ()
         if not path.is_dir():
-            return 0
+            return 0, ()
         snapshot = scan(ScanOptions(path, stay_on_filesystem=policy.stay_on_filesystem), policy)
-        return sum(entry.logical_bytes for entry in snapshot.entries)
+        size = sum(entry.logical_bytes for entry in snapshot.entries)
+        root = Entry(path, path.name, "directory", size, None, children=snapshot.entries)
+        return size, subtree_conflicts(root)
     except OSError:
-        return 0
+        return 0, ()
 
 
 def _trash_command(args: argparse.Namespace) -> int:
@@ -120,6 +123,7 @@ def _trash_command(args: argparse.Namespace) -> int:
     candidates = tuple(path.expanduser().absolute() for path in args.paths)
     eligible: list[Path] = []
     failed: list[TrashResult] = []
+    sizes: dict[Path, int] = {}
     for path in candidates:
         policy = _configured_policy(path, config)
         rejection = cleanup_rejection(path, policy)
@@ -128,12 +132,30 @@ def _trash_command(args: argparse.Namespace) -> int:
             print(f"rejected: {path} ({rejection})")
             failed.append(TrashResult(path, False, rejection))
             continue
-        size = _estimated_size(path, policy)
+        size, conflicts = _preview(path, policy)
         kind: Literal["file", "directory", "symlink"] = (
             "symlink" if path.is_symlink() else "directory" if path.is_dir() else "file"
         )
         row = report_entry(Entry(path, path.name, kind, size, None), policy, config.overrides)
         print(f"{path}  {size} logical bytes (estimated)  Class: {_escape(row.classification)}")
+        advice = row.advice
+        # Knowledge-rule protection (credential-class and protected application
+        # data); the classification label fallback defers to policy, which
+        # already approved this path above.
+        if (
+            advice is not None
+            and advice.risk == "protected"
+            and advice.category in {"credential", "application-data"}
+        ):
+            print(f"rejected: {path} ({advice.reason})")
+            failed.append(TrashResult(path, False, advice.reason))
+            continue
+        if conflicts:
+            message = f"subtree contains protected entries: {', '.join(conflicts)}"
+            print(f"rejected: {path} ({message})")
+            failed.append(TrashResult(path, False, message))
+            continue
+        sizes[path] = size
         eligible.append(path)
 
     if not eligible:
@@ -160,9 +182,10 @@ def _trash_command(args: argparse.Namespace) -> int:
         if rejection:
             results.append(TrashResult(path, False, f"rejected: {rejection}"))
         else:
-            results.extend(trash_many((path,)))
+            results.extend(trash_many((path,), sizes={path: sizes[path]}))
     for result in results:
         print(f"{result.path}: {result.message}")
+    print(summarize(results))
     return 0 if all(result.success for result in results) else 3
 
 
@@ -176,6 +199,10 @@ def _config_list_command(_: argparse.Namespace) -> int:
     print("exclusions:")
     for path in config.exclusions:
         print(f"  {path}")
+    if config.adapter_allowlist:
+        print(f"adapter_allowlist: {', '.join(config.adapter_allowlist)}")
+    else:
+        print("adapter_allowlist: read-only")
     return 0
 
 

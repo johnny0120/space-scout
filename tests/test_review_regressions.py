@@ -63,8 +63,8 @@ def test_cli_trash_rejects_ancestor_without_sizing(tmp_path, monkeypatch, capsys
         monkeypatch.setattr("space_scout.cli.default_policy", lambda path: Policy(path, (), (boundary,)))
     else:
         save_config(Config({}, (boundary,), {}), cli_config)
-    monkeypatch.setattr("space_scout.cli._estimated_size", lambda *args: pytest.fail("sized rejected parent"))
-    monkeypatch.setattr("space_scout.cli.trash_many", lambda _: pytest.fail("trashed rejected parent"))
+    monkeypatch.setattr("space_scout.cli._preview", lambda *args: pytest.fail("sized rejected parent"))
+    monkeypatch.setattr("space_scout.cli.trash_many", lambda _, **kwargs: pytest.fail("trashed rejected parent"))
     assert main(["trash", str(root), "--yes"]) == 3
     assert "rejected" in capsys.readouterr().out
     assert (boundary / "child").read_text() == "keep"
@@ -80,7 +80,7 @@ def test_cli_trash_final_recheck_after_confirmation(tmp_path, monkeypatch, cli_c
         return "trash"
 
     monkeypatch.setattr("builtins.input", confirm)
-    monkeypatch.setattr("space_scout.cli.trash_many", lambda _: pytest.fail("ignored changed exclusion"))
+    monkeypatch.setattr("space_scout.cli.trash_many", lambda _, **kwargs: pytest.fail("ignored changed exclusion"))
     assert main(["trash", str(path)]) == 3
     assert path.exists()
 
@@ -194,7 +194,7 @@ def test_cli_trash_final_recheck_rejects_symlink_swap(tmp_path, monkeypatch, cli
         return "trash"
 
     monkeypatch.setattr("builtins.input", confirm)
-    monkeypatch.setattr("space_scout.cli.trash_many", lambda _: pytest.fail("trashed swapped symlink"))
+    monkeypatch.setattr("space_scout.cli.trash_many", lambda _, **kwargs: pytest.fail("trashed swapped symlink"))
     assert main(["trash", str(path)]) == 3
 
 
