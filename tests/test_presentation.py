@@ -11,12 +11,16 @@ from space_scout.presentation import format_size, sort_key_for, visible_columns
         (89, ("name", "on_disk")),
         (90, ("name", "on_disk", "status")),
         (119, ("name", "on_disk", "status")),
-        (120, ("name", "on_disk", "logical", "class", "status")),
-        (200, ("name", "on_disk", "logical", "class", "status")),
+        (120, ("name", "on_disk", "logical", "class", "status", "risk")),
+        (200, ("name", "on_disk", "logical", "class", "status", "risk")),
     ],
 )
 def test_visible_columns_follow_fixed_width_tiers(width, expected):
     assert visible_columns(width) == expected
+
+
+def test_wide_tier_appends_risk_after_status():
+    assert visible_columns(140)[-2:] == ("status", "risk")
 
 
 def test_format_size_uses_shared_units_and_right_aligns():

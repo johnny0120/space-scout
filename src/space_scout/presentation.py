@@ -7,11 +7,11 @@ from typing import Literal
 
 from .models import Entry
 
-Column = Literal["on_disk", "name", "logical", "class", "status"]
+Column = Literal["on_disk", "name", "logical", "class", "status", "risk"]
 
 _NARROW_COLUMNS = ("name", "on_disk")
 _MEDIUM_COLUMNS = ("name", "on_disk", "status")
-_WIDE_COLUMNS = ("name", "on_disk", "logical", "class", "status")
+_WIDE_COLUMNS = ("name", "on_disk", "logical", "class", "status", "risk")
 
 
 def visible_columns(width: int) -> tuple[str, ...]:

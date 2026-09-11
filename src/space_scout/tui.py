@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
+import sys
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 from rich.text import Text
 from textual import events, work
@@ -15,13 +19,25 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, Static
 
 from .config import Config, load_config
+from .knowledge import CleanupAdvice, ResolvedTargetLike
 from .models import Entry, ScanOptions, ScanSnapshot
 from .output import _escape, report_entry
 from .policy import Policy, cleanup_rejection, default_policy
 from .policy import safe_decide as _browse_decision
 from .presentation import format_size, sort_key_for, visible_columns
+from .resolver import resolve_targets
 from .scanner import scan
-from .trash import trash_many
+from .trash import summarize, trash_many
+
+
+def default_tool_present(tool: str) -> bool:
+    """Whether *tool* is on PATH; resolved at call time so tests can patch it."""
+    return shutil.which(tool) is not None
+
+
+default_resolve_targets: Callable[[str], tuple[ResolvedTargetLike, ...]] = cast(
+    Callable[[str], tuple[ResolvedTargetLike, ...]], resolve_targets
+)
 
 
 def scan_for_browse(
@@ -115,12 +131,19 @@ class BrowseApp(App[int]):
         policy: Policy,
         config: Config,
         select_patterns: tuple[str, ...] = (),
+        *,
+        tool_present: Callable[[str], bool] | None = None,
+        resolve_targets: Callable[[str], tuple[ResolvedTargetLike, ...]] | None = None,
     ):
         super().__init__()
         self.snapshot = snapshot
         self.policy = policy or default_policy(snapshot.root)
         self.config = config or Config({}, (), {})
         self.select_patterns = select_patterns
+        self._platform = sys.platform
+        self._tool_present = tool_present
+        self._resolve_targets = resolve_targets
+        self._resolved_targets: dict[str, tuple[ResolvedTargetLike, ...]] = {}
         configured_sort = "on_disk" if self.config.sort_key == "size" else self.config.sort_key
         self._sort_column = configured_sort if configured_sort in {"on_disk", "name", "class", "status"} else "on_disk"
         self._sort_reverse = self._sort_column == "on_disk"
@@ -150,7 +173,11 @@ class BrowseApp(App[int]):
         self._render_entries()
         self.query_one("#entries", DataTable).focus()
         state = "WARNING" if self.snapshot.warnings else "READY"
-        self._status(f"{state} · {_escape(str(self.snapshot.root), escape_backslash=False)} · {len(self.snapshot.warnings)} scan warnings")
+        message = (f"{state} · {_escape(str(self.snapshot.root), escape_backslash=False)} · "
+                   f"{len(self.snapshot.warnings)} scan warnings")
+        if state == "READY":
+            message += self._safe_tier_metric()
+        self._status(message)
 
     def on_resize(self, event: events.Resize) -> None:
         if self.query("#entries"):
@@ -169,6 +196,56 @@ class BrowseApp(App[int]):
 
     def _classification(self, entry: Entry) -> str:
         return report_entry(entry, self.policy, self.config.overrides, self.unlocked_paths).classification
+
+    def _advice(self, entry: Entry) -> CleanupAdvice | None:
+        """Cleanup advice for one entry, or None when evaluation fails.
+
+        Tool presence and target resolution default to the module-level
+        functions, looked up at call time so tests can patch them. Resolver
+        results are memoized per tool for the whole session.
+        """
+        tool_present = self._tool_present if self._tool_present is not None else default_tool_present
+        resolve_targets = self._resolve_targets if self._resolve_targets is not None else default_resolve_targets
+
+        def memoized(tool: str) -> tuple[ResolvedTargetLike, ...]:
+            if tool not in self._resolved_targets:
+                self._resolved_targets[tool] = resolve_targets(tool)
+            return self._resolved_targets[tool]
+
+        try:
+            return report_entry(
+                entry, self.policy, self.config.overrides, self.unlocked_paths,
+                platform=self._platform,
+                tool_present=tool_present,
+                resolve_targets=memoized,
+            ).advice
+        except (OSError, RuntimeError, ValueError):
+            return None
+
+    def _risk_cell(self, entry: Entry) -> str:
+        advice = self._advice(entry)
+        return advice.risk.upper() if advice is not None else "—"
+
+    def _safe_tier_metric(self) -> str:
+        """Local metric: safe-tier bytes of known reclaimable bytes (design F3).
+
+        Returns an empty segment when nothing in the snapshot is reclaimable.
+        """
+        safe_bytes = 0
+        reclaimable_bytes = 0
+        pending = list(self.snapshot.entries)
+        while pending:
+            entry = pending.pop()
+            advice = self._advice(entry)
+            if advice is not None:
+                if advice.risk == "safe":
+                    safe_bytes += entry.logical_bytes
+                if advice.reclaimable:
+                    reclaimable_bytes += entry.logical_bytes
+            pending.extend(entry.children)
+        if reclaimable_bytes <= 0:
+            return ""
+        return f" · safe-tier {format_size(safe_bytes)} of {format_size(reclaimable_bytes)} reclaimable"
 
     def _entry_status(self, entry: Entry) -> str:
         if any(entry.path == path or path in entry.path.parents for path in self._trashed):
@@ -232,6 +309,7 @@ class BrowseApp(App[int]):
             "logical": "Logical",
             "class": "Class",
             "status": "Status",
+            "risk": "Risk",
         }
         byte_widths = {
             "on_disk": max((
@@ -250,6 +328,10 @@ class BrowseApp(App[int]):
             len(labels["status"]),
             *(len(self._entry_status(entry)) for entry, _ in self._visible),
         ))
+        risk_width = max((
+            len(labels["risk"]),
+            *(len(self._risk_cell(entry)) for entry, _ in self._visible),
+        ))
         name_width = max((
             len(labels["name"]),
             *(len(f"{'  ' * depth}{'▾' if entry.kind == 'directory' else '·'} {_escape(entry.name)}")
@@ -263,12 +345,13 @@ class BrowseApp(App[int]):
         # DataTable adds cell padding and a scrollbar edge to its virtual
         # width. Reserve those cells so long labels cannot create horizontal
         # scrolling, including during the first render before layout settles.
-        available = max(1, pane_width - 6)
+        available = max(1, pane_width - (len(columns) + 1))
         other_widths = sum({
             "on_disk": byte_widths["on_disk"],
             "logical": byte_widths["logical"],
             "class": min(class_width, 18),
             "status": min(status_width, 10),
+            "risk": min(risk_width, 10),
         }[column] for column in columns if column != "name")
         gaps = max(0, len(columns) - 1)
         if "name" in columns:
@@ -279,6 +362,7 @@ class BrowseApp(App[int]):
             "logical": byte_widths["logical"],
             "class": min(class_width, 18),
             "status": min(status_width, 10),
+            "risk": min(risk_width, 10),
         }
         for column in columns:
             table.add_column(labels[column], width=widths[column])
@@ -291,6 +375,7 @@ class BrowseApp(App[int]):
                 "logical": format_size(entry.logical_bytes, byte_widths["logical"]),
                 "class": Text(_escape(self._classification(entry)), no_wrap=True, overflow="ellipsis"),
                 "status": Text(self._entry_status(entry), no_wrap=True, overflow="ellipsis"),
+                "risk": Text(self._risk_cell(entry), no_wrap=True, overflow="ellipsis"),
             }
             cells = [rendered[column] for column in columns]
             table.add_row(*cells, key=str(entry.path))
@@ -316,6 +401,16 @@ class BrowseApp(App[int]):
                     f"Policy: {_escape(decision.reason)}")
             if cleanup:
                 text += f"\nCleanup: {_escape(cleanup)}"
+            advice = self._advice(entry)
+            if advice is not None:
+                text += (f"\nCleanup: {_escape(advice.category)}\n"
+                         f"Risk: {advice.risk.upper()}\n"
+                         f"Assessment: {advice.assessment_status}\n"
+                         f"Method: {_escape(advice.method)}\n"
+                         f"Impact: {_escape(advice.impact)}\n"
+                         f"Reason: {_escape(advice.reason)}\n"
+                         f"Target: {_escape(advice.target) if advice.target else '—'}\n"
+                         f"Estimated reclaimable: {format_size(entry.logical_bytes)} (scan estimate)")
             if entry.warning:
                 text += f"\nWarning: {_escape(entry.warning)}"
         self.query_one("#details", Static).update(text)
@@ -420,7 +515,7 @@ class BrowseApp(App[int]):
                 self._status(f"WARNING · Scan complete · {len(snapshot.warnings)} warnings · r to rescan")
             else:
                 self._exit_code = 0
-                self._status("READY · Scan complete · 0 warnings")
+                self._status("READY · Scan complete · 0 warnings" + self._safe_tier_metric())
         except (OSError, RuntimeError, ValueError) as exc:
             self._exit_code = 3
             self._status(f"WARNING · Scan failed: {_escape(str(exc))} · r to retry")
@@ -458,6 +553,10 @@ class BrowseApp(App[int]):
             message = cleanup_reason or "protected, excluded, skipped, or already trashed path"
             self._status(f"SKIPPED · Trash rejected: {message}")
             return
+        advice = self._advice(entry)
+        if advice is not None and advice.risk == "protected" and advice.category in {"credential", "application-data"}:
+            self._status(f"SKIPPED · Trash rejected: {advice.reason}")
+            return
         def confirm(answer: str | None) -> None:
             if answer == "trash":
                 self._trash(entry)
@@ -470,8 +569,11 @@ class BrowseApp(App[int]):
                                  "actual reclaimed space may differ.\nType trash to confirm:"), confirm)
 
     def _trash_blocked(self, entry: Entry) -> bool:
+        advice = self._advice(entry)
         return (self._entry_status(entry) in {"SKIPPED", "BLOCKED", "TRASHED"}
-                or cleanup_rejection(entry.path, self.policy) is not None)
+                or cleanup_rejection(entry.path, self.policy) is not None
+                or (advice is not None and advice.risk == "protected"
+                    and advice.category in {"credential", "application-data"}))
 
     @work
     async def _trash(self, entry: Entry) -> None:
@@ -491,7 +593,9 @@ class BrowseApp(App[int]):
             if self._trash_blocked(entry):
                 self._status("SKIPPED · Trash rejected: path is now protected or excluded.")
                 return
-            results = await asyncio.to_thread(trash_many, (entry.path,))
+            results = await asyncio.to_thread(
+                trash_many, (entry.path,), sizes={entry.path: entry.logical_bytes}
+            )
             for result in results:
                 if result.success:
                     self._trashed.add(result.path)
@@ -501,7 +605,7 @@ class BrowseApp(App[int]):
             state = "TRASHED" if all(result.success for result in results) else "WARNING"
             self._status(state + " · " + "; ".join(
                 f"{_escape(str(result.path), escape_backslash=False)}: {_escape(result.message)}" for result in results
-            ) + " · r to rescan")
+            ) + " · " + summarize(results) + " · r to rescan")
         finally:
             self._busy = False
 

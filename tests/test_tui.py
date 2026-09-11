@@ -189,7 +189,7 @@ async def test_inspector_shortcut_toggles_the_wide_pane_and_compact_layout(tmp_p
     [
         (80, ("Name", "On disk")),
         (100, ("Name", "On disk", "Status")),
-        (140, ("Name", "On disk", "Logical", "Class", "Status")),
+        (140, ("Name", "On disk", "Logical", "Class", "Status", "Risk")),
     ],
 )
 async def test_adaptive_list_uses_exact_columns_and_aligned_byte_cells(tmp_path, width, labels):
@@ -214,6 +214,78 @@ async def test_adaptive_list_uses_exact_columns_and_aligned_byte_cells(tmp_path,
             logical_cells = [str(table.get_row_at(index)[2]).strip() for index in range(table.row_count)]
             assert logical_cells == ["2.0 KiB", "1.0 B"]
             assert len({len(str(table.get_row_at(index)[2])) for index in range(table.row_count)}) == 1
+        await pilot.press("q")
+
+
+@pytest.mark.asyncio
+async def test_risk_column_shows_safe_review_protected(tmp_path, monkeypatch):
+    monkeypatch.setattr("space_scout.tui.default_tool_present", lambda tool: True)
+    uv = Entry(tmp_path / ".cache" / "uv", "uv", "directory", 2048, 4096)
+    npm = Entry(tmp_path / ".npm", ".npm", "directory", 1024, 2048)
+    npmrc = Entry(tmp_path / ".npmrc", ".npmrc", "file", 100, 100)
+    app = BrowseApp(ScanSnapshot(tmp_path, (uv, npm, npmrc)), Policy(tmp_path, (), ()), Config({}, (), {}))
+    async with app.run_test(size=(140, 30)) as pilot:
+        assert column_labels(app) == ("Name", "On disk", "Logical", "Class", "Status", "Risk")
+        table = app.query_one("#entries", DataTable)
+        by_name = {
+            str(table.get_row_at(i)[0]).split()[-1]: str(table.get_row_at(i)[5]).strip()
+            for i in range(table.row_count)
+        }
+        assert by_name["uv"] == "SAFE"
+        assert by_name[".npm"] == "REVIEW"
+        assert by_name[".npmrc"] == "PROTECTED"
+        await pilot.press("q")
+
+
+@pytest.mark.asyncio
+async def test_inspector_shows_cleanup_advice_fields(tmp_path, monkeypatch):
+    monkeypatch.setattr("space_scout.tui.default_tool_present", lambda tool: True)
+    uv = Entry(tmp_path / ".cache" / "uv", "uv", "directory", 2048, 4096)
+    app = BrowseApp(ScanSnapshot(tmp_path, (uv,)), Policy(tmp_path, (), ()), Config({}, (), {}))
+    async with app.run_test(size=(120, 30)) as pilot:
+        details = str(app.query_one("#details", Static).render())
+        assert "Cleanup: cache" in details
+        assert "Risk: SAFE" in details
+        assert "Assessment: assessed" in details
+        assert "Method: uv cache prune" in details
+        assert "Impact:" in details
+        assert "Reason:" in details
+        assert "Target: —" in details
+        assert "Estimated reclaimable: 2.0 KiB (scan estimate)" in details
+        await pilot.press("q")
+
+
+@pytest.mark.asyncio
+async def test_ready_status_includes_safe_tier_metric(tmp_path, monkeypatch):
+    monkeypatch.setattr("space_scout.tui.default_tool_present", lambda tool: True)
+    uv = Entry(tmp_path / ".cache" / "uv", "uv", "directory", 2048, 4096)
+    npm = Entry(tmp_path / ".npm", ".npm", "directory", 1024, 2048)
+    app = BrowseApp(ScanSnapshot(tmp_path, (uv, npm)), Policy(tmp_path, (), ()), Config({}, (), {}))
+    async with app.run_test(size=(120, 30)) as pilot:
+        status = str(app.query_one("#status", Static).render())
+        assert "safe-tier 2.0 KiB of 3.0 KiB reclaimable" in status
+        await pilot.press("q")
+
+
+@pytest.mark.asyncio
+async def test_resolver_results_memoized_per_tool(tmp_path):
+    calls = []
+
+    def fake_resolver(tool):
+        calls.append(tool)
+        return ()
+
+    uv_one = Entry(tmp_path / ".cache" / "uv", "uv", "directory", 2048, 4096)
+    uv_two = Entry(tmp_path / "local" / "uv" / "cache", "cache", "directory", 1024, 2048)
+    app = BrowseApp(
+        ScanSnapshot(tmp_path, (uv_one, uv_two)),
+        Policy(tmp_path, (), ()),
+        Config({}, (), {}),
+        tool_present=lambda tool: True,
+        resolve_targets=fake_resolver,
+    )
+    async with app.run_test(size=(140, 30)) as pilot:
+        assert calls == ["uv"]
         await pilot.press("q")
 
 
@@ -322,7 +394,7 @@ async def test_trash_confirmation_cancel_failure_and_no_automatic_rescan(tmp_pat
     snapshot = tree(tmp_path)
     calls = []
 
-    def trash(paths):
+    def trash(paths, **kwargs):
         calls.extend(paths)
         return (TrashResult(paths[0], False, "permission denied"),)
 
@@ -348,6 +420,40 @@ async def test_trash_confirmation_cancel_failure_and_no_automatic_rescan(tmp_pat
         status = str(app.query_one("#status", Static).render())
         assert "permission denied" in status and "r to rescan" in status
         assert app.snapshot is snapshot
+        await pilot.press("q")
+
+
+@pytest.mark.asyncio
+async def test_trash_rejects_protected_credential_row_without_prompt(tmp_path):
+    npmrc = Entry(tmp_path / ".npmrc", ".npmrc", "file", 100, 100)
+    app = BrowseApp(ScanSnapshot(tmp_path, (npmrc,)), Policy(tmp_path, (), ()), Config({}, (), {}))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("t")
+        assert not app.screen.query(Input)
+        status = str(app.query_one("#status", Static).render())
+        assert "SKIPPED · Trash rejected" in status
+        assert "npm credentials" in status
+        await pilot.press("q")
+
+
+@pytest.mark.asyncio
+async def test_trash_status_includes_moved_and_freed_summary(tmp_path, monkeypatch):
+    from space_scout.trash import TrashResult
+
+    def trash(paths, **kwargs):
+        return (TrashResult(paths[0], True, "moved to trash", moved_bytes=2048, freed_bytes=1024),)
+
+    monkeypatch.setattr("space_scout.tui.trash_many", trash)
+    snapshot = tree(tmp_path)
+    app = BrowseApp(snapshot, Policy(tmp_path, (), ()), Config({}, (), {}))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("t")
+        app.screen.query_one(Input).value = "trash"
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        status = str(app.query_one("#status", Static).render())
+        assert "moved" in status and "freed" in status
         await pilot.press("q")
 
 
@@ -513,7 +619,7 @@ async def test_trash_rejects_ancestor_of_excluded_or_protected_path(tmp_path, mo
 async def test_successful_trash_cannot_repeat_or_trash_snapshot_descendants(tmp_path, monkeypatch):
     from space_scout.trash import TrashResult
     calls = []
-    def trash(paths):
+    def trash(paths, **kwargs):
         calls.extend(paths)
         return (TrashResult(paths[0], True, "moved to trash"),)
     monkeypatch.setattr("space_scout.tui.trash_many", trash)
