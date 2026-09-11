@@ -9,6 +9,8 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from .knowledge import TOOL_METHODS
+
 
 @dataclass(frozen=True, slots=True)
 class Config:
@@ -17,6 +19,7 @@ class Config:
     overrides: dict[str, str]
     sort_key: str = "size"
     minimum_bytes: int = 0
+    adapter_allowlist: tuple[str, ...] = ()
 
 
 def config_path() -> Path:
@@ -58,7 +61,14 @@ def load_config(path: Path | None = None) -> Config:
         raise ValueError(f"could not read configuration {target}: {exc}") from exc
     if not isinstance(raw, dict):
         raise ValueError("configuration must be a TOML table")
-    allowed = {"shortcuts", "exclusions", "overrides", "sort_key", "minimum_bytes"}
+    allowed = {
+        "shortcuts",
+        "exclusions",
+        "overrides",
+        "sort_key",
+        "minimum_bytes",
+        "adapter_allowlist",
+    }
     unknown = set(raw) - allowed
     if unknown:
         raise ValueError(f"unknown configuration key(s): {', '.join(sorted(unknown))}")
@@ -84,7 +94,17 @@ def load_config(path: Path | None = None) -> Config:
     minimum_bytes = raw.get("minimum_bytes", 0)
     if isinstance(minimum_bytes, bool) or not isinstance(minimum_bytes, int) or minimum_bytes < 0:
         raise ValueError("minimum_bytes must be a non-negative integer")
-    return Config(shortcuts, exclusions, dict(overrides_raw), sort_key, minimum_bytes)
+
+    adapter_raw = raw.get("adapter_allowlist", [])
+    if not isinstance(adapter_raw, list):
+        raise ValueError("adapter_allowlist must be an array of adapter ids")
+    if any(not isinstance(entry, str) or entry not in TOOL_METHODS for entry in adapter_raw):
+        raise ValueError("adapter_allowlist must contain only valid adapter ids")
+    adapter_allowlist = tuple(adapter_raw)
+
+    return Config(
+        shortcuts, exclusions, dict(overrides_raw), sort_key, minimum_bytes, adapter_allowlist
+    )
 
 
 def _toml_string(value: str) -> str:
@@ -124,6 +144,11 @@ def _validate_config(config: Config) -> None:
         raise ValueError("minimum_bytes must be a non-negative integer")
     if config.minimum_bytes < 0:
         raise ValueError("minimum_bytes must be a non-negative integer")
+    if not isinstance(config.adapter_allowlist, tuple):
+        raise ValueError("adapter_allowlist must be a tuple of adapter ids")
+    for adapter in config.adapter_allowlist:
+        if not isinstance(adapter, str) or adapter not in TOOL_METHODS:
+            raise ValueError("adapter_allowlist must contain only valid adapter ids")
 
 
 def save_config(config: Config, path: Path | None = None) -> None:
@@ -132,6 +157,9 @@ def save_config(config: Config, path: Path | None = None) -> None:
     lines = [
         f"sort_key = {_toml_string(config.sort_key)}",
         f"minimum_bytes = {config.minimum_bytes}",
+        "adapter_allowlist = [",
+        *[f"  {_toml_string(value)}," for value in config.adapter_allowlist],
+        "]",
         "exclusions = [",
         *[f"  {_toml_string(str(value))}," for value in config.exclusions],
         "]",
