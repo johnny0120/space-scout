@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Sequence
+import sys
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TextIO
 
 from .classify import classify
+from .knowledge import CleanupAdvice, ResolvedTargetLike, build_advice
 from .models import Entry, ScanSnapshot, ScanWarning
 from .policy import Policy, cleanup_rejection, decide
 
@@ -24,11 +26,21 @@ class ReportRow:
     classification: str
     status: str
     reason: str | None
+    advice: CleanupAdvice | None = None
 
 
-def report_entry(entry: Entry, policy: Policy, overrides: dict[str, str] | None = None,
-                 unlocked: frozenset[Path] = frozenset()) -> ReportRow:
+def report_entry(
+    entry: Entry,
+    policy: Policy,
+    overrides: dict[str, str] | None = None,
+    unlocked: frozenset[Path] = frozenset(),
+    *,
+    platform: str | None = None,
+    tool_present: Callable[[str], bool] | None = None,
+    resolve_targets: Callable[[str], tuple[ResolvedTargetLike, ...]] | None = None,
+) -> ReportRow:
     """Annotate one row; filesystem and classification errors stay local."""
+    resolved_platform = platform or sys.platform
     try:
         decision = decide(entry.path, policy, unlocked)
         rejection = cleanup_rejection(entry.path, policy)
@@ -39,19 +51,39 @@ def report_entry(entry: Entry, policy: Policy, overrides: dict[str, str] | None 
         if entry.warning:
             reason = f"{reason}; {entry.warning}"
         status: str = decision.status
+        advice = build_advice(
+            entry, decision, policy,
+            platform=resolved_platform,
+            classification=label,
+            tool_present=tool_present,
+            resolve_targets=resolve_targets,
+        )
         return ReportRow(str(entry.path), entry.name, entry.kind, entry.logical_bytes,
-                         entry.allocated_bytes, label, status, reason)
+                         entry.allocated_bytes, label, status, reason, advice)
     except (OSError, RuntimeError, ValueError) as exc:
         reason = entry.warning or f"Cannot evaluate path policy or classification: {exc}"
         return ReportRow(str(entry.path), entry.name, "skipped", 0, None, "skipped", "skipped", reason)
 
 
-def flatten(snapshot: ScanSnapshot, policy: Policy, overrides: dict[str, str] | None = None) -> tuple[ReportRow, ...]:
+def flatten(
+    snapshot: ScanSnapshot,
+    policy: Policy,
+    overrides: dict[str, str] | None = None,
+    *,
+    platform: str | None = None,
+    tool_present: Callable[[str], bool] | None = None,
+    resolve_targets: Callable[[str], tuple[ResolvedTargetLike, ...]] | None = None,
+) -> tuple[ReportRow, ...]:
     rows: list[ReportRow] = []
     pending = list(snapshot.entries)
     while pending:
         entry = pending.pop()
-        rows.append(report_entry(entry, policy, overrides))
+        rows.append(report_entry(
+            entry, policy, overrides,
+            platform=platform,
+            tool_present=tool_present,
+            resolve_targets=resolve_targets,
+        ))
         pending.extend(entry.children)
     return tuple(sorted(rows, key=lambda row: (
         -row.logical_bytes, os.path.normcase(os.path.normpath(row.path)), row.path,

@@ -127,3 +127,89 @@ def test_scan_cli_table_and_missing_root(tmp_path, capsys, isolated_cli):
     assert json.loads(capsys.readouterr().out)["warnings"]
     assert main(["scan"]) == 2
     assert main(["scan", str(tmp_path), "--depth", "-1"]) == 2
+
+
+def test_report_row_carries_cleanup_advice(tmp_path):
+    from space_scout.policy import Policy
+
+    cache_dir = tmp_path / ".cache" / "uv"
+    entry = Entry(cache_dir, "uv", "directory", 128, 256, ())
+    policy = Policy(tmp_path, (), ())
+    row, = flatten(ScanSnapshot(tmp_path, (entry,)), policy, platform="linux")
+    assert row.advice is not None
+    assert row.advice.risk == "safe"
+
+
+def test_report_row_advice_defaults_to_none():
+    from space_scout.output import ReportRow
+
+    row = ReportRow("/tmp/x", "x", "file", 1, 1, "file", "scan", None)
+    assert row.advice is None
+
+
+def test_protected_entry_advice_is_protected(tmp_path):
+    from space_scout.policy import Policy
+
+    target = tmp_path / "locked"
+    entry = Entry(target, "locked", "directory", 10, 20, ())
+    policy = Policy(tmp_path, (), (target,))
+    row, = flatten(ScanSnapshot(tmp_path, (entry,)), policy, platform="linux")
+    assert row.advice is not None
+    assert row.advice.risk == "protected"
+    assert row.advice.method == "Manual review"
+
+
+def test_json_serializes_advice_with_stable_keys(tmp_path):
+    from space_scout.policy import Policy
+
+    cache_dir = tmp_path / ".cache" / "uv"
+    entry = Entry(cache_dir, "uv", "directory", 64, 64, ())
+    snapshot = ScanSnapshot(tmp_path, (entry,))
+    stream = StringIO()
+    render_json(snapshot, flatten(snapshot, Policy(tmp_path, (), ()), platform="linux"), stream)
+    payload = json.loads(stream.getvalue())
+    assert payload["entries"][0]["advice"] is not None
+    assert list(payload) == sorted(payload)
+    assert list(payload["entries"][0]) == sorted(payload["entries"][0])
+    assert list(payload["entries"][0]["advice"]) == sorted(payload["entries"][0]["advice"])
+
+
+def test_report_entry_uses_injected_resolver(tmp_path):
+    from dataclasses import dataclass
+    from pathlib import Path as PathT
+
+    from space_scout.output import report_entry
+    from space_scout.policy import Policy
+
+    cache_dir = tmp_path / ".cache" / "uv"
+    entry = Entry(cache_dir, "uv", "directory", 8, 16, ())
+    policy = Policy(tmp_path, (), ())
+
+    @dataclass
+    class FakeResolved:
+        path: PathT
+        key: str
+        redirected: bool
+        reason: str
+
+    def resolve_targets(tool: str):
+        assert tool == "uv"
+        return (FakeResolved(cache_dir, "cache", False, ""),)
+
+    row = report_entry(
+        entry, policy, platform="linux", resolve_targets=resolve_targets
+    )
+    assert row.advice is not None
+    assert row.advice.target == str(cache_dir)
+
+
+def test_flatten_existing_fields_unchanged():
+    from space_scout.policy import Policy
+
+    tmp_path = Path("/workspace/project")
+    entry = Entry(tmp_path / "a.py", "a.py", "file", 7, None, warning="unreadable")
+    row, = flatten(ScanSnapshot(tmp_path, (entry,)), Policy(tmp_path, (), (tmp_path,)))
+    assert row.classification == "source"
+    assert row.status == "protected"
+    assert "unreadable" in row.reason
+    assert row.allocated_bytes is None
