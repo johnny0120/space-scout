@@ -62,7 +62,7 @@ valid when warnings are present.
 
 ## Browse TUI
 
-The Explorer list adapts to terminal width. `Name` and `On disk` are always visible. At medium widths it also shows `Status`; at wide widths it adds `Logical` and `Class`. In compact mode, press `i` to switch between the list and the Inspector; long labels are ellipsized so the list never requires horizontal scrolling. Unknown `On disk` values form a separate sort bucket after entries with known allocation data in the default order (and remain shown as `—`). The Inspector holds the full path, both size measures, classification, status, modified range, warnings, and policy reason.
+The Explorer list adapts to terminal width. `Name` and `On disk` are always visible. At medium widths it also shows `Status`; at wide widths it adds `Logical`, `Class`, and `Risk`. The `Risk` column shows the cleanup advice tier for each row: `SAFE`, `REVIEW`, or `PROTECTED`. In compact mode, press `i` to switch between the list and the Inspector; long labels are ellipsized so the list never requires horizontal scrolling. Unknown `On disk` values form a separate sort bucket after entries with known allocation data in the default order (and remain shown as `—`). The Inspector holds the full path, both size measures, classification, status, modified range, warnings, and policy reason. When cleanup advice exists, the Inspector also shows the advice category, risk, assessment, method, impact, reason, the exact target path, and the estimated reclaimable bytes.
 
 Common downloads such as PDF, Office documents, data files, fonts, media, and
 installers receive explicit advisory classes. A file with an unrecognized
@@ -83,6 +83,8 @@ Space Scout always scans an explicit directory. It never silently scans your hom
 Cleanup is reversible: eligible paths are moved to the operating system Trash after an exact-word confirmation. Restore a trashed item through Finder on macOS, File Explorer on Windows, or the desktop Trash on Linux. Space Scout previews the selected path and `On disk` size, then re-checks policy immediately before the move. For the non-interactive CLI, `trash --yes PATH ...` skips the prompt only for those explicit paths; policy checks and the final re-check still apply.
 
 Protected and excluded locations remain skipped by default, including their descendants. Select a protected path and use `u`, then type `unlock`, only when you deliberately need to inspect it. That unlock is limited to the current browse session and scan; it never grants permission to Trash the path.
+
+Cleanup advice is advisory only. Scanning never executes a cleanup action; it attaches advice to report rows and shows it in the TUI. Native execution stays gated to a later phase and is enabled adapter by adapter. The `adapter_allowlist` setting in the config is a read-only-by-default kill switch: with an empty allowlist, no native adapter is enabled.
 
 ## Not a file manager
 
