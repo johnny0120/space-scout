@@ -40,4 +40,5 @@ desktop.ini
 *.sqlite
 *.db
 .superpowers/
+.omo/
 !uv.lock
