@@ -38,7 +38,15 @@ jobs:
           uv run ruff check .
           uv run mypy src tests scripts
           uv run python scripts/check_public_repo.py .
-          uv run pytest -q
+          uv run pytest -q --junitxml=windows-test-results.xml
+
+      - name: Upload Windows test report
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-report-${{ matrix.python-version }}
+          path: windows-test-results.xml
+          if-no-files-found: ignore
 
   native:
     name: Build ${{ matrix.os }}
