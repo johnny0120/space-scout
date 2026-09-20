@@ -4,6 +4,7 @@ import pytest
 from textual.widgets import DataTable, Input, Static
 
 from space_scout.config import Config
+from space_scout.knowledge import CleanupAdvice
 from space_scout.models import Entry, ScanOptions, ScanSnapshot, ScanWarning
 from space_scout.policy import Policy
 from space_scout.scanner import scan
@@ -454,6 +455,44 @@ async def test_trash_status_includes_moved_and_freed_summary(tmp_path, monkeypat
         await pilot.pause()
         status = str(app.query_one("#status", Static).render())
         assert "moved" in status and "freed" in status
+        await pilot.press("q")
+
+
+@pytest.mark.asyncio
+async def test_cleanup_plan_previews_total_and_trashes_non_overlapping_safe_items(tmp_path, monkeypatch):
+    from space_scout.trash import TrashResult
+
+    advice = CleanupAdvice("cache", "safe", "assessed", True, "Trash", "regenerable", "test")
+    snapshot = tree(tmp_path)
+    app = BrowseApp(snapshot, Policy(tmp_path, (), ()), Config({}, (), {}))
+    monkeypatch.setattr(app, "_advice", lambda entry: advice)
+    calls = []
+
+    def trash(paths, **kwargs):
+        calls.append((tuple(paths), kwargs["sizes"]))
+        return tuple(TrashResult(path, True, "moved to trash", moved_bytes=kwargs["sizes"][path]) for path in paths)
+
+    monkeypatch.setattr("space_scout.tui.trash_many", trash)
+    monkeypatch.setattr("space_scout.tui.load_config", lambda: Config({}, (), {}))
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.press("p")
+        prompt = str(app.screen.query_one("#prompt", Static).render())
+        assert "Cleanup plan" in prompt
+        assert "Estimated reclaimable: 4.0 KiB" in prompt
+        assert str(tmp_path / "z-dir") in prompt
+        assert str(tmp_path / "z-dir" / "child.py") not in prompt
+        assert calls == []
+        app.screen.query_one(Input).value = "trash"
+        assert calls == []
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert calls == [(
+            (tmp_path / "z-dir", tmp_path / "a.zip"),
+            {tmp_path / "z-dir": 4096, tmp_path / "a.zip": 10},
+        )]
+        assert "moved" in str(app.query_one("#status", Static).render())
         await pilot.press("q")
 
 

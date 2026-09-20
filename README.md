@@ -85,6 +85,7 @@ pretending to know the file's purpose.
 - `i`: show or hide the Inspector (in compact mode it switches between the list and Inspector)
 - `s`: cycle the four sort fields — `On disk`, `Name`, `Class`, and `Status`; `S`: reverse the direction
 - `/`: filter by name, class, or status (and accept `min:<bytes>`); `r`: rescan without discarding list state
+- `p`: preview a conservative safe cleanup plan, including total reclaimable `On disk` bytes; type `trash` to confirm the batch
 - `t`: preview and move the selected eligible path to Trash; `u`: request a scan-only unlock for a protected path
 
 ## Safety

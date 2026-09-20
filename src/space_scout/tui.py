@@ -21,7 +21,8 @@ from textual.widgets import DataTable, Footer, Input, Static
 from .config import Config, load_config
 from .knowledge import CleanupAdvice, ResolvedTargetLike
 from .models import Entry, ScanOptions, ScanSnapshot
-from .output import _escape, report_entry
+from .output import ReportRow, _escape, report_entry
+from .planner import CleanupPlan, build_cleanup_plan, estimated_reclaimable_bytes
 from .policy import Policy, cleanup_rejection, default_policy
 from .policy import safe_decide as _browse_decision
 from .presentation import format_size, sort_key_for, visible_columns
@@ -115,6 +116,7 @@ class BrowseApp(App[int]):
         ("S", "reverse_sort", "Reverse sort"),
         ("slash", "filter", "Filter"), ("i", "toggle_inspector", "Inspector"),
         ("r", "rescan", "Rescan"),
+        ("p", "plan", "Plan"),
         ("t", "trash", "Trash"), ("u", "unlock", "Unlock"), ("q", "quit", "Quit"),
     ]
     CSS = """
@@ -246,6 +248,30 @@ class BrowseApp(App[int]):
         if reclaimable_bytes <= 0:
             return ""
         return f" · safe-tier {format_size(safe_bytes)} of {format_size(reclaimable_bytes)} reclaimable"
+
+    def _all_entries(self) -> tuple[Entry, ...]:
+        """Flatten the immutable snapshot without changing its display state."""
+        entries: list[Entry] = []
+        pending = list(self.snapshot.entries)
+        while pending:
+            entry = pending.pop()
+            entries.append(entry)
+            pending.extend(entry.children)
+        return tuple(entries)
+
+    def _plan_rows(self) -> tuple[ReportRow, ...]:
+        """Build planner rows using the same advice and status as the Inspector."""
+        rows: list[ReportRow] = []
+        for entry in self._all_entries():
+            rows.append(ReportRow(
+                str(entry.path), entry.name, entry.kind, entry.logical_bytes,
+                entry.allocated_bytes, self._classification(entry), self._entry_status(entry),
+                entry.warning, self._advice(entry),
+            ))
+        return tuple(rows)
+
+    def _entry_index(self) -> dict[Path, Entry]:
+        return {entry.path: entry for entry in self._all_entries()}
 
     def _entry_status(self, entry: Entry) -> str:
         if any(entry.path == path or path in entry.path.parents for path in self._trashed):
@@ -543,6 +569,34 @@ class BrowseApp(App[int]):
                                  "This allows reading protected contents for this session. "
                                  "Cleanup remains blocked. Type unlock to confirm:"), confirm)
 
+    def action_plan(self) -> None:
+        """Preview a conservative batch cleanup plan before any trash action."""
+        if self._busy:
+            return
+        plan = build_cleanup_plan(self._plan_rows())
+        if not plan.items:
+            self._status("READY · No safe cleanup candidates in this snapshot.")
+            return
+        listed = "\n".join(
+            f"  {_escape(row.path, escape_backslash=False)} · {format_size(estimated_reclaimable_bytes(row))}"
+            for row in plan.items
+        )
+        prompt = (
+            "Cleanup plan (preview only)\n"
+            f"Items: {len(plan.items)}\n"
+            f"Estimated reclaimable: {format_size(plan.estimated_bytes)} (On disk; logical fallback)\n\n"
+            f"{listed}\n\n"
+            "No files have been changed. Type trash to move this exact plan to system trash:"
+        )
+
+        def confirm(answer: str | None) -> None:
+            if answer == "trash":
+                self._trash_plan(plan)
+            else:
+                self._status("Cleanup plan cancelled.")
+
+        self.push_screen(_Prompt(prompt), confirm)
+
     def action_trash(self) -> None:
         entry = self._selected()
         if self._busy or entry is None:
@@ -574,6 +628,51 @@ class BrowseApp(App[int]):
                 or cleanup_rejection(entry.path, self.policy) is not None
                 or (advice is not None and advice.risk == "protected"
                     and advice.category in {"credential", "application-data"}))
+
+    @work
+    async def _trash_plan(self, plan: CleanupPlan) -> None:
+        self._busy = True
+        self._status("CLEANABLE · Moving cleanup plan to system trash…")
+        try:
+            try:
+                current_config = load_config()
+            except (OSError, RuntimeError, ValueError) as exc:
+                self._exit_code = 3
+                self._status(f"WARNING · Cleanup plan rejected: cannot reload configuration: {_escape(str(exc))}")
+                return
+            self.policy = replace(self.policy, exclusions=tuple(dict.fromkeys(
+                (*self.policy.exclusions, *current_config.exclusions))))
+            entries = self._entry_index()
+            eligible: list[Path] = []
+            sizes: dict[Path, int] = {}
+            rejected: list[str] = []
+            for row in plan.items:
+                entry = entries.get(Path(row.path))
+                if entry is None or self._trash_blocked(entry):
+                    rejected.append(row.path)
+                    continue
+                eligible.append(entry.path)
+                sizes[entry.path] = estimated_reclaimable_bytes(row)
+            results = await asyncio.to_thread(trash_many, tuple(eligible), sizes=sizes) if eligible else ()
+            for result in results:
+                if result.success:
+                    self._trashed.add(result.path)
+                else:
+                    self._exit_code = 3
+            if rejected:
+                self._exit_code = max(self._exit_code, 2)
+            self._render_entries()
+            state = "TRASHED" if results and all(result.success for result in results) and not rejected else "WARNING"
+            messages = [
+                f"{_escape(str(result.path), escape_backslash=False)}: {_escape(result.message)}"
+                for result in results
+            ]
+            if rejected:
+                messages.append(f"rejected {len(rejected)} path(s) after final policy check")
+            detail = "; ".join(messages) if messages else "no eligible paths"
+            self._status(state + " · " + detail + " · " + summarize(results) + " · r to rescan")
+        finally:
+            self._busy = False
 
     @work
     async def _trash(self, entry: Entry) -> None:
