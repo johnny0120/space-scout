@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -34,11 +35,18 @@ def trash_root(path: Path) -> Path | None:
 
 def free_bytes(path: Path) -> int | None:
     """Free bytes on the volume containing *path*, or None when unavailable."""
+    statvfs = getattr(os, "statvfs", None)
+    if statvfs is not None:
+        try:
+            stat = statvfs(path)
+        except (OSError, AttributeError, ValueError):
+            pass
+        else:
+            return stat.f_bavail * stat.f_frsize
     try:
-        stat = os.statvfs(path)
+        return shutil.disk_usage(path).free
     except (OSError, AttributeError, ValueError):
         return None
-    return stat.f_bavail * stat.f_frsize
 
 
 def _device(path: Path) -> int | None:

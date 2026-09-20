@@ -1,7 +1,9 @@
 import os
+import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
-from space_scout.trash import TrashResult, summarize, trash_many, trash_one
+from space_scout.trash import TrashResult, free_bytes, summarize, trash_many, trash_one
 
 
 def test_trash_reports_each_item(monkeypatch, tmp_path: Path):
@@ -64,10 +66,18 @@ def test_freed_bytes_from_statvfs_delta(monkeypatch, tmp_path: Path):
         state["calls"] += 1
         return FakeStatvfs(100, 4096) if state["calls"] == 1 else FakeStatvfs(110, 4096)
 
-    monkeypatch.setattr("space_scout.trash.os.statvfs", fake_statvfs)
+    monkeypatch.setattr("space_scout.trash.sys.platform", "linux")
+    monkeypatch.setattr("space_scout.trash.os.statvfs", fake_statvfs, raising=False)
     result = trash_one(target)
     assert result.success
     assert result.freed_bytes == (110 - 100) * 4096
+
+
+def test_free_bytes_uses_disk_usage_when_statvfs_is_unavailable(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr("space_scout.trash.os.statvfs", None, raising=False)
+    monkeypatch.setattr(shutil, "disk_usage", lambda _: SimpleNamespace(free=345))
+
+    assert free_bytes(tmp_path) == 345
 
 
 def test_same_volume_move_frees_nothing_until_emptied(monkeypatch, tmp_path: Path):
