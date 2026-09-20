@@ -11,7 +11,9 @@ out of scope because ``bun pm cache`` exits 1 without a package.json.
 
 from __future__ import annotations
 
+import ntpath
 import os
+import posixpath
 import shutil
 import subprocess
 import sys
@@ -44,7 +46,11 @@ class ResolvedTarget:
 
 
 def _absolute_binary(binary: Path) -> str:
-    return os.fspath(binary if binary.is_absolute() else binary.absolute())
+    # A rooted path without a drive (``/opt/tools/uv``) is already the
+    # caller's intended spelling. On Windows ``Path.absolute()`` would
+    # silently attach the current drive, which makes platform-neutral tests
+    # and injected tool paths resolve to a different executable.
+    return os.fspath(binary if binary.is_absolute() or binary.anchor else binary.absolute())
 
 
 def _reject_unsafe(value: str) -> None:
@@ -89,14 +95,15 @@ def _output_lines(stdout: str) -> list[str]:
     return [line for line in stripped if line]
 
 
-def _expand_template(template: str, env: Mapping[str, str]) -> str:
+def _expand_template(template: str, env: Mapping[str, str], platform: str) -> str:
     home = env.get("HOME") or env.get("USERPROFILE") or str(Path.home())
+    join = ntpath.join if platform == "win32" else posixpath.join
     values = {
         "home": home,
-        "xdg_cache": env.get("XDG_CACHE_HOME") or os.path.join(home, ".cache"),
-        "localappdata": env.get("LOCALAPPDATA") or os.path.join(home, "AppData", "Local"),
+        "xdg_cache": env.get("XDG_CACHE_HOME") or join(home, ".cache"),
+        "localappdata": env.get("LOCALAPPDATA") or join(home, "AppData", "Local"),
         "userprofile": env.get("USERPROFILE") or home,
-        "appdata": env.get("APPDATA") or os.path.join(home, "AppData", "Roaming"),
+        "appdata": env.get("APPDATA") or join(home, "AppData", "Roaming"),
     }
     return template.format_map(values)
 
@@ -128,7 +135,7 @@ def _build_target(
         redirected = True
         reason = f"redirected: environment variable {override} overrides the default location"
     else:
-        default = _expand_template(spec.default_templates[platform], env)
+        default = _expand_template(spec.default_templates[platform], env, platform)
         redirected = not _same_path(reported, default, platform)
         reason = (
             "redirected: tool-reported path differs from the default location"

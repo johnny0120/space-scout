@@ -126,7 +126,7 @@ async def test_keyboard_navigation_expand_sort_filter_preserves_snapshot(tmp_pat
         table = app.query_one("#entries", DataTable)
         assert "z-dir" in str(table.get_row_at(0))
         await pilot.press("enter")
-        assert table.row_count == 3
+        assert table.row_count == 3, f"table={table_text(app)} visible={app._visible!r}"
         await pilot.press("j")
         assert "child.py" in str(app.query_one("#details", Static).render())
         await pilot.press("k", "enter")
