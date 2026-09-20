@@ -48,6 +48,20 @@ jobs:
           path: windows-test-results.xml
           if-no-files-found: ignore
 
+      - name: Summarize Windows test failures
+        if: failure() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (Test-Path windows-test-results.xml) {
+            [xml]$report = Get-Content windows-test-results.xml
+            foreach ($case in $report.testsuites.testsuite.testcase) {
+              if ($case.failure -or $case.error) {
+                $detail = if ($case.failure) { $case.failure.message } else { $case.error.message }
+                "::error title=Windows test failure::$($case.classname)::$($case.name) $detail"
+              }
+            }
+          }
+
   native:
     name: Build ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
