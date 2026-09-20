@@ -56,6 +56,17 @@ For stable output that a script can consume:
 uv run space-scout scan /path/to/project --json
 ```
 
+To preview a non-overlapping cleanup plan without moving anything:
+
+```bash
+uv run space-scout plan "$HOME/Downloads" --bytes 10GiB
+```
+
+The plan uses allocated `On disk` bytes when available, excludes `REVIEW` items by
+default, and never selects both a directory and one of its descendants. Add
+`--include-review` only when you want explicitly reviewable candidates included in
+the preview. A plan is advisory; use `trash` or the TUI only after reviewing it.
+
 The command exits with `0` for a successful scan, `1` when a scan completes with warnings,
 and `2` for invalid input or an operation that could not be completed. JSON output remains
 valid when warnings are present.

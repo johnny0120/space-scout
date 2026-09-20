@@ -164,3 +164,30 @@ def test_scan_json_includes_advice(tmp_path, capsys, isolated_cli):
     payload = json.loads(capsys.readouterr().out)
     assert payload["entries"]
     assert all("advice" in entry for entry in payload["entries"])
+
+
+def test_plan_command_reports_a_non_overlapping_reclaimable_preview(tmp_path, capsys, monkeypatch):
+    from space_scout.knowledge import CleanupAdvice
+    from space_scout.models import ScanSnapshot
+    from space_scout.output import ReportRow
+
+    advice = CleanupAdvice("cache", "safe", "assessed", True, "Trash", "regenerable", "test")
+    cache = ReportRow(str(tmp_path / "cache"), "cache", "directory", 2048, 2048, "cache", "scan", None, advice)
+    child = ReportRow(str(tmp_path / "cache" / "uv"), "uv", "directory", 1024, 1024, "cache", "scan", None, advice)
+    snapshot = ScanSnapshot(tmp_path, ())
+    monkeypatch.setattr("space_scout.cli.scan", lambda *args, **kwargs: snapshot)
+    monkeypatch.setattr("space_scout.cli.flatten", lambda *args, **kwargs: (child, cache))
+    monkeypatch.setattr("space_scout.cli.load_config", lambda: Config({}, (), {}))
+
+    assert main(["plan", str(tmp_path), "--bytes", "1KiB", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["target_bytes"] == 1024
+    assert payload["estimated_reclaimable_bytes"] == 2048
+    assert [entry["path"] for entry in payload["entries"]] == [str(tmp_path / "cache")]
+    assert payload["complete"] is True
+
+
+def test_plan_rejects_negative_target(tmp_path, capsys):
+    assert main(["plan", str(tmp_path), "--bytes", "-1"]) == 2
+    assert "bytes" in capsys.readouterr().err

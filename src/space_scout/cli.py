@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import json
+import re
 import sys
 from collections.abc import Callable, Sequence
+from dataclasses import asdict
 from pathlib import Path
 from typing import Literal
 
@@ -17,7 +20,9 @@ from .output import (
     report_entry,
     report_warnings,
 )
+from .planner import build_cleanup_plan, estimated_reclaimable_bytes
 from .policy import Policy, cleanup_rejection, default_policy
+from .presentation import format_size
 from .scanner import scan
 from .trash import TrashResult, summarize, trash_many
 
@@ -31,6 +36,13 @@ def _build_parser() -> argparse.ArgumentParser:
     scan_parser.add_argument("--json", action="store_true")
     scan_parser.add_argument("--depth", type=_depth)
     scan_parser.set_defaults(handler=_scan_command)
+
+    plan_parser = subparsers.add_parser("plan")
+    plan_parser.add_argument("path", metavar="PATH", type=Path)
+    plan_parser.add_argument("--bytes", type=_bytes, metavar="SIZE")
+    plan_parser.add_argument("--include-review", action="store_true")
+    plan_parser.add_argument("--json", action="store_true")
+    plan_parser.set_defaults(handler=_plan_command)
 
     browse_parser = subparsers.add_parser("browse")
     browse_parser.add_argument("path", metavar="PATH", type=Path)
@@ -68,6 +80,31 @@ def _depth(value: str) -> int:
     return depth
 
 
+def _bytes(value: str) -> int:
+    """Parse a non-negative byte count with optional binary/decimal suffix."""
+    match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([KMGTPE]?I?B)?\s*", value, re.IGNORECASE)
+    if match is None:
+        raise argparse.ArgumentTypeError("bytes must look like 500, 1MiB, or 2GB")
+    number = float(match.group(1))
+    unit = (match.group(2) or "B").upper()
+    factors = {
+        "B": 1,
+        "KB": 1000,
+        "MB": 1000**2,
+        "GB": 1000**3,
+        "TB": 1000**4,
+        "PB": 1000**5,
+        "KIB": 1024,
+        "MIB": 1024**2,
+        "GIB": 1024**3,
+        "TIB": 1024**4,
+        "PIB": 1024**5,
+    }
+    if unit not in factors:
+        raise argparse.ArgumentTypeError("bytes must look like 500, 1MiB, or 2GB")
+    return int(number * factors[unit])
+
+
 def _scan_command(args: argparse.Namespace) -> int:
     config = load_config()
     root = args.path.expanduser().absolute()
@@ -78,6 +115,45 @@ def _scan_command(args: argparse.Namespace) -> int:
         render_json(snapshot, rows, sys.stdout)
     else:
         render_table(rows, sys.stdout, snapshot)
+    return 2 if report_warnings(snapshot, rows) else 0
+
+
+def _plan_command(args: argparse.Namespace) -> int:
+    config = load_config()
+    root = args.path.expanduser().absolute()
+    policy = _configured_policy(root, config)
+    snapshot = scan(ScanOptions(root, stay_on_filesystem=policy.stay_on_filesystem), policy)
+    rows = flatten(snapshot, policy, config.overrides)
+    plan = build_cleanup_plan(rows, target_bytes=args.bytes, include_review=args.include_review)
+    if args.json:
+        payload = {
+            "root": str(root),
+            "target_bytes": plan.target_bytes,
+            "estimated_reclaimable_bytes": plan.estimated_bytes,
+            "complete": plan.complete,
+            "entries": [
+                {**asdict(row), "estimated_reclaimable_bytes": estimated_reclaimable_bytes(row)}
+                for row in plan.items
+            ],
+            "warnings": [
+                {"path": str(warning.path), "code": warning.code, "message": warning.message}
+                for warning in report_warnings(snapshot, rows)
+            ],
+        }
+        json.dump(payload, sys.stdout, ensure_ascii=False, sort_keys=True, indent=2)
+        sys.stdout.write("\n")
+    else:
+        print("RECLAIMABLE  RISK    CLASS  PATH")
+        for row in plan.items:
+            amount = estimated_reclaimable_bytes(row)
+            risk = row.advice.risk.upper() if row.advice is not None else "—"
+            print(f"{format_size(amount):>11}  {risk:<7} {row.classification:<6} {row.path}")
+        target = "none" if plan.target_bytes is None else format_size(plan.target_bytes)
+        state = "met" if plan.complete else "not met"
+        print(f"Estimated reclaimable: {format_size(plan.estimated_bytes)}")
+        print(f"Target: {target} ({state})")
+        for warning in report_warnings(snapshot, rows):
+            print(f"WARNING {_escape(warning.code)}: {_escape(str(warning.path))}: {_escape(warning.message)}")
     return 2 if report_warnings(snapshot, rows) else 0
 
 
