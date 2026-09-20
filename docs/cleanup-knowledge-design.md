@@ -195,6 +195,11 @@ When the target's `st_dev` differs from the Trash volume, refuse the move or kee
 object on the source volume. In environments without a Trash, report the method as `adapter_missing` or require a
 stronger confirmation; never silently fall back to permanent deletion.
 
+On Windows, the Recycle Bin is volume-specific and managed by the shell rather than
+one discoverable filesystem directory. The native `send2trash` adapter performs the
+move, so Space Scout does not reject a move merely because no portable Trash root can
+be resolved; adapter failures are still surfaced to the user.
+
 ### Retention caveat
 
 The operating system may auto-empty the Trash on a schedule. Emptying the Trash is an

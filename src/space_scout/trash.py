@@ -62,6 +62,12 @@ def _nearest_existing_ancestor(path: Path) -> Path | None:
 
 def _refusal(candidate: Path) -> str | None:
     """Return a refusal reason, or None when the move may proceed."""
+    # Windows' Recycle Bin is volume-specific and its location is managed by
+    # the shell.  ``send2trash`` talks to that native API directly, so there
+    # is no portable filesystem root to preflight here.  Do not mistake the
+    # lack of a discoverable path for the lack of a Recycle Bin.
+    if sys.platform.startswith("win"):
+        return None
     root = trash_root(candidate)
     if root is None:
         return "trash unavailable: no system trash on this platform"

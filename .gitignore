@@ -41,4 +41,5 @@ desktop.ini
 *.db
 .superpowers/
 .omo/
+.codegraph
 !uv.lock

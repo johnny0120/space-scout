@@ -7,6 +7,7 @@ from space_scout.trash import TrashResult, summarize, trash_many, trash_one
 def test_trash_reports_each_item(monkeypatch, tmp_path: Path):
     calls = []
     monkeypatch.setattr("space_scout.trash.send2trash", lambda value: calls.append(value))
+    _trash_in_tmp(monkeypatch, tmp_path)
     first, second = (tmp_path / "a", tmp_path / "b")
     first.write_text("a")
     second.write_text("b")
@@ -18,6 +19,7 @@ def test_trash_reports_each_item(monkeypatch, tmp_path: Path):
 def test_trash_one_reports_supported_failures(monkeypatch, tmp_path: Path):
     path = tmp_path / "item"
     path.write_text("item")
+    _trash_in_tmp(monkeypatch, tmp_path)
     monkeypatch.setattr("space_scout.trash.send2trash", lambda _: (_ for _ in ()).throw(OSError("denied")))
     result = trash_one(path)
     assert result.path == path
@@ -86,6 +88,9 @@ def test_same_volume_move_frees_nothing_until_emptied(monkeypatch, tmp_path: Pat
 def test_trash_refuses_cross_volume_move(monkeypatch, tmp_path: Path):
     calls = []
     monkeypatch.setattr("space_scout.trash.send2trash", lambda value: calls.append(value))
+    # The Windows adapter delegates volume selection to the native Recycle
+    # Bin API; this filesystem-device preflight is POSIX-specific.
+    monkeypatch.setattr("space_scout.trash.sys.platform", "linux")
     _trash_in_tmp(monkeypatch, tmp_path)
     target = tmp_path / "item"
     target.write_text("item")
@@ -105,6 +110,10 @@ def test_trash_reports_unavailable_without_trash_root(monkeypatch, tmp_path: Pat
     monkeypatch.setattr("space_scout.trash.send2trash", lambda value: calls.append(value))
     target = tmp_path / "item"
     target.write_text("item")
+    # Windows delegates to the native Recycle Bin and does not expose a
+    # stable filesystem root.  Exercise the unavailable-root refusal on a
+    # POSIX platform explicitly so this test is portable.
+    monkeypatch.setattr("space_scout.trash.sys.platform", "linux")
     monkeypatch.setattr("space_scout.trash.trash_root", lambda path: None)
     result = trash_one(target)
     assert not result.success
@@ -116,6 +125,20 @@ def test_trash_reports_unavailable_without_trash_root(monkeypatch, tmp_path: Pat
     assert not result.success
     assert "unavailable" in result.message
     assert calls == []
+
+
+def test_windows_uses_native_recycle_bin_without_a_discoverable_root(monkeypatch, tmp_path: Path):
+    calls = []
+    target = tmp_path / "item"
+    target.write_text("item")
+    monkeypatch.setattr("space_scout.trash.sys.platform", "win32")
+    monkeypatch.setattr("space_scout.trash.trash_root", lambda path: None)
+    monkeypatch.setattr("space_scout.trash.send2trash", lambda value: calls.append(value))
+
+    result = trash_one(target)
+
+    assert result.success
+    assert calls == [str(target)]
 
 
 def test_trash_many_partial_failure_counts_only_successes(monkeypatch, tmp_path: Path):

@@ -22,7 +22,19 @@ def test_check_script_exists_and_uses_uv_run() -> None:
 
 def test_check_script_keeps_running_after_a_failed_check(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
-    shutil.copytree(Path(__file__).resolve().parents[1], repo, ignore=shutil.ignore_patterns(".git", ".venv", "dist*", "__pycache__", "*.egg-info"))
+    shutil.copytree(
+        Path(__file__).resolve().parents[1],
+        repo,
+        ignore=shutil.ignore_patterns(
+            ".git",
+            ".venv",
+            ".omo",
+            ".codegraph",
+            "dist*",
+            "__pycache__",
+            "*.egg-info",
+        ),
+    )
     script = repo / "scripts" / "check.sh"
     script.chmod(script.stat().st_mode | stat.S_IEXEC)
 
