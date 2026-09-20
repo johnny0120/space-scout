@@ -33,15 +33,16 @@ def test_build_argv_uses_absolute_binary_and_terminator(
     captured: list[list[str]] = []
     monkeypatch.setattr(subprocess, "run", _capture_run(captured))
     result = run_query(Path("/opt/tools/uv"), ("cache", "clean"), positional=("ruff",))
-    assert captured == [["/opt/tools/uv", "cache", "clean", "--", "ruff"]]
-    assert result.argv == ("/opt/tools/uv", "cache", "clean", "--", "ruff")
+    binary = str(Path("/opt/tools/uv"))
+    assert captured == [[binary, "cache", "clean", "--", "ruff"]]
+    assert result.argv == (binary, "cache", "clean", "--", "ruff")
 
 
 def test_build_argv_omits_terminator_without_positionals(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: list[list[str]] = []
     monkeypatch.setattr(subprocess, "run", _capture_run(captured))
     run_query(Path("/opt/tools/uv"), ("cache", "dir"))
-    assert captured == [["/opt/tools/uv", "cache", "dir"]]
+    assert captured == [[str(Path("/opt/tools/uv")), "cache", "dir"]]
 
 
 def test_run_query_rejects_dash_leading_positional(monkeypatch: pytest.MonkeyPatch) -> None:
